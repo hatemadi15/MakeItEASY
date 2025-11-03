@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cheapest Makeup Finder</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div class="page">
+      <header class="header">
+        <span class="logo">💄 Cheapest Makeup Finder</span>
+        <span class="tagline">Find the lowest live prices across MENA</span>
+      </header>
+      <main>
+        <section class="search">
+          <label class="search-label" for="query-input">Search brand + product + shade…</label>
+          <div class="search-bar">
+            <input
+              id="query-input"
+              type="text"
+              list="brand-suggestions"
+              placeholder="Search brand + product + shade (e.g., ‘Fit Me 220’)"
+            />
+            <datalist id="brand-suggestions">
+              <option value="NARS"></option>
+              <option value="Maybelline"></option>
+              <option value="Huda Beauty"></option>
+              <option value="Fenty Beauty"></option>
+              <option value="Sephora Collection"></option>
+              <option value="Benefit"></option>
+              <option value="Too Faced"></option>
+              <option value="Charlotte Tilbury"></option>
+              <option value="L'Oréal"></option>
+              <option value="NYX"></option>
+            </datalist>
+            <select id="country-select">
+              <option value="">All Countries</option>
+              <option value="LB">Lebanon</option>
+              <option value="AE">United Arab Emirates</option>
+              <option value="SA">Saudi Arabia</option>
+            </select>
+            <select id="condition-select">
+              <option value="new">New only</option>
+              <option value="any">Any condition</option>
+            </select>
+            <button id="search-button">Search</button>
+          </div>
+        </section>
+        <section id="status" class="status"></section>
+        <section id="results" class="results empty">
+          <div class="empty-state">
+            Try “Maybelline Fit Me 220” or “Huda Beauty Lash Glue”.
+          </div>
+        </section>
+      </main>
+      <footer class="footer">
+        <small>Prices are refreshed regularly. Confidence badges reflect data quality.</small>
+      </footer>
+    </div>
+    <template id="offer-template">
+      <article class="offer-card">
+        <div class="offer-header">
+          <span class="product-name"></span>
+          <span class="cheapest-badge hidden">Cheapest now</span>
+        </div>
+        <div class="price-line">
+          <span class="converted-price"></span>
+          <span class="original-price"></span>
+        </div>
+        <div class="breakdown">
+          <span class="base-price"></span>
+          <span class="shipping"></span>
+        </div>
+        <div class="meta">
+          <span class="merchant"></span>
+          <span class="timestamp"></span>
+        </div>
+        <div class="badges">
+          <span class="confidence"></span>
+          <span class="availability"></span>
+          <span class="condition"></span>
+        </div>
+        <p class="analysis-summary"></p>
+        <div class="card-actions">
+          <button class="details-button" type="button">Why cheapest?</button>
+          <a class="open-link" target="_blank" rel="noopener">Open store</a>
+        </div>
+      </article>
+    </template>
+    <div id="details-layer" class="details-layer hidden" role="dialog" aria-modal="true">
+      <div class="details-dialog">
+        <button id="details-close" class="details-close" type="button" aria-label="Close details">×</button>
+        <h2 id="details-title" class="details-title"></h2>
+        <p id="details-summary" class="details-summary"></p>
+        <div class="details-section">
+          <h3>Price breakdown</h3>
+          <ul id="details-breakdown" class="details-list"></ul>
+        </div>
+        <div id="details-assumptions-section" class="details-section">
+          <h3>Assumptions</h3>
+          <ul id="details-assumptions" class="details-list"></ul>
+        </div>
+        <div class="details-section">
+          <h3>Confidence</h3>
+          <p id="details-confidence" class="details-body-text"></p>
+        </div>
+        <div class="details-section">
+          <h3>Evidence</h3>
+          <p id="details-evidence" class="details-body-text"></p>
+          <a id="details-screenshot" class="details-screenshot hidden" target="_blank" rel="noopener">View screenshot</a>
+        </div>
+      </div>
+    </div>
+    <script src="app.js" type="module"></script>
+  </body>
+</html>

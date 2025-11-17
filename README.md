@@ -11,14 +11,14 @@ Google Custom Search instance that uses the search engine id
 ## Requirements
 
 * Python 3.9+
-* `requests` (install via `pip install -r requirements.txt`)
+* (Optional) `requests` — install via `pip install -r requirements.txt` for faster HTTP calls.
 
 ## Usage
 
 Run the CLI by passing the product query. Optional arguments let you narrow the
-results by brand, product type, tags, and price. You can also append
-`--include-google` to surface relevant shopping links through the provided
-Google Custom Search engine.
+results by brand, product type, tags, price, and rating. Add
+`--include-google --google-results 3` to surface relevant shopping links
+through the provided Google Custom Search engine.
 
 ```bash
 python makeiteasy.py "maybelline lipstick" \
@@ -26,8 +26,26 @@ python makeiteasy.py "maybelline lipstick" \
   --product-type lipstick \
   --price-max 15 \
   --product-tags vegan cruelty-free \
-  --include-google
+  --max-results 10 \
+  --sort-by rating --descending \
+  --include-google --google-results 3
 ```
+
+When results are found, the CLI prints a quick summary (count, price range,
+average rating), a compact table, and then a detailed per-product view with
+links and descriptions.
+
+### Guided interactive mode
+
+If you prefer prompts, skip the query and use `--interactive` to be guided
+through each filter step:
+
+```bash
+python makeiteasy.py --interactive
+```
+
+You'll be asked for the search phrase, brand, price range, ratings, and tags.
+Press Enter at any prompt to skip that filter.
 
 Environment variables `GOOGLE_API_KEY` and `GOOGLE_CSE_ID` override the defaults
 if you need to supply your own credentials.

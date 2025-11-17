@@ -6,11 +6,19 @@ without scraping social media platforms.
 """
 from __future__ import annotations
 
+import json
 import os
+import sys
 import textwrap
-from typing import Any, Dict, Iterable, List, MutableMapping, Optional
+from typing import Any, Dict, Iterable, List, MutableMapping, Optional, Sequence
+from urllib import error as urlerror
+from urllib import parse as urlparse
+from urllib import request as urlrequest
 
-import requests
+try:
+    import requests  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    requests = None  # type: ignore
 
 MAKEUP_API_URL = "http://makeup-api.herokuapp.com/api/v1/products.json"
 DEFAULT_GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyAF9e9otuHHWCpv7MYacwle_qLZT17-08I")
@@ -25,10 +33,41 @@ def _clean_tags(tags: Optional[Iterable[str]]) -> Optional[str]:
     return ",".join(tag.strip() for tag in tags if tag)
 
 
+class HTTPRequestError(RuntimeError):
+    """Raised when an HTTP call fails regardless of the backend used."""
+
+
 def _request_json(url: str, params: MutableMapping[str, Any]) -> Any:
-    response = requests.get(url, params=params, timeout=15)
-    response.raise_for_status()
-    return response.json()
+    params = {key: value for key, value in params.items() if value is not None}
+
+    if requests is not None:
+        try:
+            response = requests.get(url, params=params, timeout=15)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as exc:  # type: ignore[attr-defined]
+            raise HTTPRequestError(str(exc)) from exc
+
+    query_string = urlparse.urlencode(params)
+    full_url = f"{url}?{query_string}" if query_string else url
+    try:
+        with urlrequest.urlopen(full_url, timeout=15) as resp:
+            payload = resp.read().decode("utf-8")
+    except urlerror.HTTPError as exc:  # pragma: no cover - exercised via network
+        raise HTTPRequestError(str(exc)) from exc
+    except urlerror.URLError as exc:  # pragma: no cover - exercised via network
+        raise HTTPRequestError(str(exc)) from exc
+
+    return json.loads(payload)
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def search_makeup_products(
@@ -131,11 +170,117 @@ def format_product(product: Dict[str, Any]) -> str:
     ).strip()
 
 
+def _median(values: Sequence[float]) -> float:
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2
+
+
+def summarize_products(products: Sequence[Dict[str, Any]]) -> str:
+    prices = [_coerce_float(product.get("price")) for product in products]
+    prices = [price for price in prices if price is not None]
+    ratings = [_coerce_float(product.get("rating")) for product in products]
+    ratings = [rating for rating in ratings if rating is not None]
+
+    summary_bits = [f"{len(products)} product(s) matched"]
+    if prices:
+        summary_bits.append(f"price range ${min(prices):.2f}-${max(prices):.2f} (median ${_median(prices):.2f})")
+    if ratings:
+        avg_rating = sum(ratings) / len(ratings)
+        summary_bits.append(f"avg rating {avg_rating:.1f}/5")
+
+    return ", ".join(summary_bits)
+
+
+def build_table(products: Sequence[Dict[str, Any]]) -> str:
+    """Render a simple ASCII table summarizing key product attributes."""
+
+    if not products:
+        return ""
+
+    headers = ["#", "Brand", "Name", "Type", "Price", "Rating"]
+    rows: List[List[str]] = []
+    for idx, product in enumerate(products, 1):
+        price = product.get("price")
+        currency = product.get("currency")
+        currency_suffix = f" {currency}" if currency else ""
+        price_display = f"${price}{currency_suffix}" if price else "n/a"
+        rating_display = product.get("rating") or "n/a"
+        rows.append(
+            [
+                str(idx),
+                str(product.get("brand", "Unknown")),
+                str(product.get("name", "Unnamed")),
+                str(product.get("product_type", "n/a")),
+                price_display,
+                str(rating_display),
+            ]
+        )
+
+    col_widths = [
+        max(len(row[col_idx]) for row in ([headers] + rows))
+        for col_idx in range(len(headers))
+    ]
+
+    def format_row(row: Sequence[str]) -> str:
+        return " | ".join(cell.ljust(col_widths[idx]) for idx, cell in enumerate(row))
+
+    divider = "-+-".join("-" * width for width in col_widths)
+    table_lines = [format_row(headers), divider]
+    table_lines.extend(format_row(row) for row in rows)
+    return "\n".join(table_lines)
+
+
+def run_interactive_prompt(args: Any) -> Any:
+    """Guide the user through common filters via stdin prompts."""
+
+    print("Interactive search mode — press Enter to skip any step.")
+
+    def prompt(text: str, default: Optional[str] = None) -> Optional[str]:
+        suffix = f" [{default}]" if default else ""
+        value = input(f"{text}{suffix}: ").strip()
+        return value or default
+
+    args.query = args.query or prompt("Product search phrase")
+    if not args.query:
+        print("A search phrase is required. Exiting.")
+        sys.exit(1)
+
+    args.brand = args.brand or prompt("Brand (optional)")
+    args.product_type = args.product_type or prompt("Product type (lipstick, foundation, etc.)")
+    args.product_category = args.product_category or prompt("Product category (liquid, pencil, powder, …)")
+
+    if not args.product_tags:
+        tags_answer = prompt("Product tags (comma separated: vegan, cruelty free, etc.)")
+        if tags_answer:
+            args.product_tags = [tag.strip() for tag in tags_answer.split(",") if tag.strip()]
+
+    if args.price_min is None:
+        price_min = prompt("Minimum price")
+        args.price_min = _coerce_float(price_min)
+
+    if args.price_max is None:
+        price_max = prompt("Maximum price")
+        args.price_max = _coerce_float(price_max)
+
+    if args.rating_min is None:
+        rating_min = prompt("Minimum rating (0-5)")
+        args.rating_min = _coerce_float(rating_min)
+
+    if args.rating_max is None:
+        rating_max = prompt("Maximum rating (0-5)")
+        args.rating_max = _coerce_float(rating_max)
+
+    return args
+
+
 def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Search for makeup products and related shopping links.")
-    parser.add_argument("query", help="Search phrase to look for in product names and descriptions.")
+    parser.add_argument("query", nargs="?", help="Search phrase to look for in product names and descriptions.")
     parser.add_argument("--brand")
     parser.add_argument("--product-type")
     parser.add_argument("--product-category")
@@ -145,35 +290,66 @@ def main() -> None:
     parser.add_argument("--rating-min", type=float)
     parser.add_argument("--rating-max", type=float)
     parser.add_argument("--max-results", type=int, default=5)
+    parser.add_argument("--sort-by", choices=["price", "rating", "name"], help="Sort the Makeup API results by a field.")
+    parser.add_argument("--descending", action="store_true", help="Reverse the sort order.")
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Prompt for missing information instead of failing when the query is omitted.",
+    )
     parser.add_argument("--include-google", action="store_true", help="Also perform a Google Custom Search for the query.")
+    parser.add_argument("--google-results", type=int, default=5, help="How many Google results to show when --include-google is enabled.")
 
     args = parser.parse_args()
 
-    products = search_makeup_products(
-        args.query,
-        brand=args.brand,
-        product_type=args.product_type,
-        product_category=args.product_category,
-        product_tags=args.product_tags,
-        price_less_than=args.price_max,
-        price_greater_than=args.price_min,
-        rating_greater_than=args.rating_min,
-        rating_less_than=args.rating_max,
-        max_results=args.max_results,
-    )
+    if not args.query and not args.interactive:
+        parser.error("Please supply a query or run with --interactive to be guided through the prompts.")
+
+    if args.interactive:
+        args = run_interactive_prompt(args)
+    elif not args.query:
+        # parser.error above prevents reaching this condition unless interactive is True.
+        return
+
+    try:
+        products = search_makeup_products(
+            args.query,
+            brand=args.brand,
+            product_type=args.product_type,
+            product_category=args.product_category,
+            product_tags=args.product_tags,
+            price_less_than=args.price_max,
+            price_greater_than=args.price_min,
+            rating_greater_than=args.rating_min,
+            rating_less_than=args.rating_max,
+            max_results=args.max_results,
+        )
+    except HTTPRequestError as exc:
+        print(f"Failed to query the Makeup API: {exc}")
+        sys.exit(1)
+
+    if args.sort_by:
+        key_func = {
+            "price": lambda product: _coerce_float(product.get("price")) or float("inf"),
+            "rating": lambda product: _coerce_float(product.get("rating")) or -float("inf"),
+            "name": lambda product: str(product.get("name", "")),
+        }[args.sort_by]
+        products.sort(key=key_func, reverse=args.descending)
 
     if not products:
         print("No products found for that query.")
     else:
-        print(f"Top {len(products)} Makeup API result(s):")
+        print(summarize_products(products))
+        print("\n" + build_table(products))
+        print("\nDetailed view:")
         for index, product in enumerate(products, 1):
             print(f"\n[{index}] {format_product(product)}")
 
     if args.include_google:
         print("\nGoogle Custom Search results:")
         try:
-            search_results = google_custom_search(args.query)
-        except requests.HTTPError as exc:
+            search_results = google_custom_search(args.query, num=args.google_results)
+        except HTTPRequestError as exc:
             print(f"  Google search failed: {exc}")
             return
 

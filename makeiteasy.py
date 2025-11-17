@@ -37,6 +37,39 @@ class HTTPRequestError(RuntimeError):
     """Raised when an HTTP call fails regardless of the backend used."""
 
 
+def _proxy_hint() -> Optional[str]:
+    proxy = os.getenv("http_proxy") or os.getenv("https_proxy")
+    if not proxy:
+        return None
+    return proxy
+
+
+def _friendly_http_error(exc: Exception, *, url: str) -> str:
+    if isinstance(exc, urlerror.HTTPError) and exc.code == 403:
+        proxy = _proxy_hint()
+        if proxy:
+            return (
+                "HTTP 403 Forbidden — the network proxy "
+                f"{proxy} blocked outbound access to {url}."
+            )
+        return f"HTTP 403 Forbidden while calling {url}"
+
+    if requests is not None:
+        from requests import HTTPError as RequestsHTTPError  # type: ignore
+
+        if isinstance(exc, RequestsHTTPError) and exc.response is not None:
+            if exc.response.status_code == 403:
+                proxy = _proxy_hint()
+                if proxy:
+                    return (
+                        "HTTP 403 Forbidden — the network proxy "
+                        f"{proxy} blocked outbound access to {url}."
+                    )
+                return f"HTTP 403 Forbidden while calling {url}"
+
+    return str(exc)
+
+
 def _request_json(url: str, params: MutableMapping[str, Any]) -> Any:
     params = {key: value for key, value in params.items() if value is not None}
 
@@ -46,7 +79,7 @@ def _request_json(url: str, params: MutableMapping[str, Any]) -> Any:
             response.raise_for_status()
             return response.json()
         except requests.RequestException as exc:  # type: ignore[attr-defined]
-            raise HTTPRequestError(str(exc)) from exc
+            raise HTTPRequestError(_friendly_http_error(exc, url=url)) from exc
 
     query_string = urlparse.urlencode(params)
     full_url = f"{url}?{query_string}" if query_string else url
@@ -54,7 +87,7 @@ def _request_json(url: str, params: MutableMapping[str, Any]) -> Any:
         with urlrequest.urlopen(full_url, timeout=15) as resp:
             payload = resp.read().decode("utf-8")
     except urlerror.HTTPError as exc:  # pragma: no cover - exercised via network
-        raise HTTPRequestError(str(exc)) from exc
+        raise HTTPRequestError(_friendly_http_error(exc, url=url)) from exc
     except urlerror.URLError as exc:  # pragma: no cover - exercised via network
         raise HTTPRequestError(str(exc)) from exc
 

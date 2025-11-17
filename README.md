@@ -49,3 +49,12 @@ Press Enter at any prompt to skip that filter.
 
 Environment variables `GOOGLE_API_KEY` and `GOOGLE_CSE_ID` override the defaults
 if you need to supply your own credentials.
+
+### Troubleshooting
+
+If searches immediately fail with a message such as
+`HTTP 403 Forbidden — the network proxy http://proxy:8080 blocked outbound access to http://makeup-api.herokuapp.com/api/v1/products.json.`,
+you are running inside a network that disallows outbound calls to Heroku (this
+sandbox uses a restrictive proxy). Re-run the CLI from a machine with
+unrestricted HTTP/S egress or configure your proxy to allow connections to the
+Makeup API host.

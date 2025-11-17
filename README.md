@@ -15,6 +15,23 @@ Google Custom Search instance that uses the search engine id
 
 ## Usage
 
+### Web UI (MVP)
+
+If you prefer a point-and-click experience, run the built-in mini web server:
+
+```bash
+python app.py
+```
+
+Then open http://localhost:8000 to access a responsive dashboard that lets you
+enter the same filters as the CLI (query, brand, type, category, price ranges,
+tags, and rating filters) and optionally include curated Google shopping links.
+Errors from blocked proxies or invalid input are surfaced inline so you always
+know why a search failed. No additional dependencies are required beyond the
+standard library.
+
+### CLI Helper
+
 Run the CLI by passing the product query. Optional arguments let you narrow the
 results by brand, product type, tags, price, and rating. Add
 `--include-google --google-results 3` to surface relevant shopping links

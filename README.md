@@ -26,14 +26,14 @@ python app.py
 Then open http://localhost:8000 to access a responsive dashboard that splits the
 experience into two cards:
 
-1. **Makeup API Product Finder** — accepts the same filters as the CLI (query,
-   brand, type, category, tags, price, and rating ranges) and returns matching
-   products directly from the free Makeup API.
-2. **Google Deal Finder** — runs the provided query through the Google Custom
-   Search Engine and extracts structured pricing data so you can quickly spot
-   the cheapest merchants for that query. Results that don't advertise a price
-   are collapsed behind a disclosure widget so they never clutter the main
-   ranking.
+1. **EasyDirectory** — accepts the same filters as the CLI (query, brand, type,
+   category, tags, price, and rating ranges) and returns matching products
+   directly from the free Makeup API.
+2. **EasySearch** — runs the provided query through the Google Custom Search
+   Engine, limits the matches to a recent timeframe (past week/month/quarter),
+   and extracts structured pricing data so you can quickly spot the cheapest
+   merchants for that query. Results that don't advertise a price are collapsed
+   behind a disclosure widget so they never clutter the main ranking.
 
 Errors from blocked proxies or invalid input are surfaced inline so you always
 know why a search failed. No additional dependencies are required beyond the
@@ -43,9 +43,11 @@ standard library.
 
 Run the CLI by passing the product query. Optional arguments let you narrow the
 results by brand, product type, tags, price, and rating. Add
-`--include-google --google-results 3` to surface relevant shopping links
-through the provided Google Custom Search engine, or use `--google-cheapest` to
-rank those links by the lowest extracted price.
+`--include-google --google-results 3` to surface relevant shopping links through
+EasySearch (the provided Google Custom Search engine), or use
+`--google-cheapest` to rank those links by the lowest extracted price. The
+Google helpers now limit results to the most recent month by default; adjust the
+window with `--google-date-restrict d7|m1|m3|y1|none`.
 
 ```bash
 python makeiteasy.py "maybelline lipstick" \

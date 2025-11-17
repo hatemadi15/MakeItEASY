@@ -10,12 +10,21 @@ from urllib import parse
 
 from makeiteasy import (
     HTTPRequestError,
+    DEFAULT_GOOGLE_DATE_RESTRICT,
     google_price_rank,
     search_makeup_products,
 )
 
 HOST = "0.0.0.0"
 PORT = 8000
+
+RECENCY_CHOICES = [
+    ("d7", "Past 7 days"),
+    ("m1", "Past month"),
+    ("m3", "Past 3 months"),
+    ("y1", "Past year"),
+    ("none", "Any time"),
+]
 
 
 def _first(query_params: Dict[str, List[str]], key: str) -> str:
@@ -160,40 +169,52 @@ def _render_page(context: Dict[str, Any]) -> str:
     makeup_results_section = ""
     if makeup["submitted"] and makeup["products"]:
         products_html = _render_products(makeup["products"])
-        makeup_results_section = f"<section class=\"results\"><h2>Products</h2>{products_html}</section>"
+        makeup_results_section = (
+            f"<section class=\"results\"><h2>EasyDirectory results</h2>{products_html}</section>"
+        )
     elif makeup["submitted"] and not makeup["errors"]:
         makeup_results_section = "<p>No products matched your filters. Try a broader query.</p>"
 
     makeup_errors = ""
     if makeup["errors"]:
         items = "".join(f"<li>{html.escape(err)}</li>" for err in makeup["errors"])
-        makeup_errors = f"<div class=\"errors\"><strong>We hit a snag:</strong><ul>{items}</ul></div>"
+        makeup_errors = f"<div class=\"errors\"><strong>EasyDirectory issue:</strong><ul>{items}</ul></div>"
 
     google_errors = ""
     if google["errors"]:
         items = "".join(f"<li>{html.escape(err)}</li>" for err in google["errors"])
-        google_errors = f"<div class=\"errors\"><strong>Unable to rank Google offers:</strong><ul>{items}</ul></div>"
+        google_errors = f"<div class=\"errors\"><strong>EasySearch issue:</strong><ul>{items}</ul></div>"
 
     google_section = ""
     if google["submitted"] and (google["ranked"] or google["unpriced"]):
         html_body = _render_google_ranked(
             {"ranked": google["ranked"], "unpriced": google["unpriced"], "info": google["info"]}
         )
-        google_section = f"<section class=\"google-results\"><h2>Cheapest Google Matches</h2>{html_body}</section>"
+        google_section = f"<section class=\"google-results\"><h2>EasySearch results</h2>{html_body}</section>"
     elif google["submitted"] and not google["errors"]:
         google_section = (
-            "<p>No Google results contained price information. Try a different query or increase the result count.</p>"
+            "<p>No EasySearch results contained price information. Try a different query or increase the result count.</p>"
         )
 
     makeup_form = makeup["form_state"]
     google_form = google["form_state"]
+
+    recency_value = google_form.get("recency") or ""
+    recency_options = "".join(
+        (
+            f'<option value="{html.escape(value)}"'
+            + (" selected" if value == recency_value else "")
+            + f">{html.escape(label)}</option>"
+        )
+        for value, label in google_form.get("recency_choices", [])
+    )
 
     return f"""<!doctype html>
 <html lang=\"en\">
   <head>
     <meta charset=\"utf-8\" />
     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
-    <title>MakeItEASY — Makeup Product Finder</title>
+    <title>EasyDirectory + EasySearch — Makeup Product Finder</title>
     <style>
       :root {{ font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif; color: #1f2933; background: #f4f6f8; }}
       body {{ margin: 0; padding: 0; background: #f4f6f8; }}
@@ -223,12 +244,12 @@ def _render_page(context: Dict[str, Any]) -> str:
   </head>
   <body>
     <header>
-      <h1>MakeItEASY</h1>
-      <p>Search the free Makeup API and curated Google shopping links without any scraping.</p>
+      <h1>EasyDirectory + EasySearch</h1>
+      <p>Explore EasyDirectory for curated Makeup API matches and EasySearch for fresh, price-ranked Google offers.</p>
     </header>
     <main>
       <section class=\"card\">
-        <h2>Makeup API Product Finder</h2>
+        <h2>EasyDirectory</h2>
         <form method=\"get\">
           <input type=\"hidden\" name=\"makeup_submitted\" value=\"1\" />
           <div><label for=\"query\">Search phrase</label><input id=\"query\" name=\"query\" value=\"{html.escape(makeup_form['query'])}\" placeholder=\"lipstick\" /></div>
@@ -248,15 +269,16 @@ def _render_page(context: Dict[str, Any]) -> str:
         {makeup_results_section}
       </section>
       <section class=\"card\">
-        <h2>Google Deal Finder</h2>
+        <h2>EasySearch</h2>
         <form method=\"get\">
           <input type=\"hidden\" name=\"google_submitted\" value=\"1\" />
           <div><label for=\"google_query\">Search phrase</label><input id=\"google_query\" name=\"google_query\" value=\"{html.escape(google_form['query'])}\" placeholder=\"maybelline superstay lipstick\" /></div>
           <div><label for=\"google_results\">Results to scan (1-10)</label><input id=\"google_results\" name=\"google_results\" value=\"{html.escape(google_form['results'])}\" /></div>
+          <div><label for=\"google_recency\">Recency filter</label><select id=\"google_recency\" name=\"google_recency\">{recency_options}</select></div>
           <div class=\"actions\">
             <button type=\"submit\">Rank cheapest options</button>
           </div>
-        </form>
+          </form>
         {google_errors}
         {google_section}
       </section>
@@ -321,6 +343,13 @@ class MakeupHandler(BaseHTTPRequestHandler):
             default=5,
         )
 
+        google_recency = _first(params, "google_recency").strip() or DEFAULT_GOOGLE_DATE_RESTRICT
+        valid_recency_values = {value for value, _ in RECENCY_CHOICES}
+        if google_recency not in valid_recency_values:
+            google_errors.append("Select a valid recency filter.")
+            google_recency = DEFAULT_GOOGLE_DATE_RESTRICT
+        google_date_restrict = None if google_recency == "none" else google_recency
+
         google_ranked: List[Dict[str, Any]] = []
         google_unpriced: List[Dict[str, Any]] = []
         google_info: Dict[str, Any] = {}
@@ -330,7 +359,11 @@ class MakeupHandler(BaseHTTPRequestHandler):
                 google_errors.append("Please enter a Google search phrase.")
             elif not google_errors:
                 try:
-                    ranking = google_price_rank(google_query, num=google_results_requested)
+                    ranking = google_price_rank(
+                        google_query,
+                        num=google_results_requested,
+                        date_restrict=google_date_restrict,
+                    )
                     google_ranked = ranking["ranked"]
                     google_unpriced = ranking["unpriced"]
                     google_info = ranking["info"]
@@ -352,6 +385,8 @@ class MakeupHandler(BaseHTTPRequestHandler):
         google_form_state = {
             "query": google_query,
             "results": str(google_results_requested),
+            "recency": google_recency,
+            "recency_choices": RECENCY_CHOICES,
         }
 
         html_body = _render_page(
@@ -386,7 +421,7 @@ class MakeupHandler(BaseHTTPRequestHandler):
 
 def main() -> None:
     server = HTTPServer((HOST, PORT), MakeupHandler)
-    print(f"Serving MakeItEASY UI on http://{HOST}:{PORT}")
+    print(f"Serving EasyDirectory + EasySearch UI on http://{HOST}:{PORT}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

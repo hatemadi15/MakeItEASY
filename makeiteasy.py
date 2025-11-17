@@ -24,6 +24,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency
 MAKEUP_API_URL = "http://makeup-api.herokuapp.com/api/v1/products.json"
 DEFAULT_GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyAF9e9otuHHWCpv7MYacwle_qLZT17-08I")
 DEFAULT_GOOGLE_CX = os.getenv("GOOGLE_CSE_ID", "151662c5c18ba4c4c")
+DEFAULT_GOOGLE_DATE_RESTRICT = os.getenv("GOOGLE_DATE_RESTRICT", "m1")
 
 
 def _clean_tags(tags: Optional[Iterable[str]]) -> Optional[str]:
@@ -170,6 +171,7 @@ def google_custom_search(
     api_key: Optional[str] = None,
     search_engine_id: Optional[str] = None,
     num: int = 5,
+    date_restrict: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run a Google Custom Search query for additional product information."""
 
@@ -182,6 +184,8 @@ def google_custom_search(
         "q": query,
         "num": max(1, min(num, 10)),
     }
+    if date_restrict:
+        params["dateRestrict"] = date_restrict
     return _request_json("https://www.googleapis.com/customsearch/v1", params)
 
 
@@ -262,12 +266,13 @@ def google_price_rank(
     query: str,
     *,
     num: int = 10,
+    date_restrict: Optional[str] = None,
     search_response: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Return Google Custom Search results sorted by the cheapest parsed price."""
 
     if search_response is None:
-        search_response = google_custom_search(query, num=num)
+        search_response = google_custom_search(query, num=num, date_restrict=date_restrict)
 
     ranked: List[Dict[str, Any]] = []
     unpriced: List[Dict[str, Any]] = []
@@ -449,6 +454,14 @@ def main() -> None:
         action="store_true",
         help="Rank Google Custom Search matches by extracted price information.",
     )
+    parser.add_argument(
+        "--google-date-restrict",
+        default=DEFAULT_GOOGLE_DATE_RESTRICT,
+        help=(
+            "Limit Google results to a recent window, e.g. d7 (past 7 days), m1 (past month). "
+            "Set to 'none' to disable."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -460,6 +473,12 @@ def main() -> None:
     elif not args.query:
         # parser.error above prevents reaching this condition unless interactive is True.
         return
+
+    date_restrict_arg = (args.google_date_restrict or "").strip()
+    if date_restrict_arg.lower() in {"", "none", "off"}:
+        google_date_restrict: Optional[str] = None
+    else:
+        google_date_restrict = date_restrict_arg
 
     try:
         products = search_makeup_products(
@@ -499,7 +518,11 @@ def main() -> None:
     google_error: Optional[str] = None
     if args.include_google or args.google_cheapest:
         try:
-            google_data = google_custom_search(args.query, num=args.google_results)
+            google_data = google_custom_search(
+                args.query,
+                num=args.google_results,
+                date_restrict=google_date_restrict,
+            )
         except HTTPRequestError as exc:
             google_error = str(exc)
 
@@ -524,7 +547,12 @@ def main() -> None:
             print(f"  Unable to score Google results: {google_error or 'Unknown error'}")
             return
 
-        ranking = google_price_rank(args.query, num=args.google_results, search_response=google_data)
+        ranking = google_price_rank(
+            args.query,
+            num=args.google_results,
+            search_response=google_data,
+            date_restrict=google_date_restrict,
+        )
         priced = ranking["ranked"]
         if not priced:
             print("  None of the returned results included structured price information.")

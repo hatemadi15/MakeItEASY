@@ -23,9 +23,18 @@ If you prefer a point-and-click experience, run the built-in mini web server:
 python app.py
 ```
 
-Then open http://localhost:8000 to access a responsive dashboard that lets you
-enter the same filters as the CLI (query, brand, type, category, price ranges,
-tags, and rating filters) and optionally include curated Google shopping links.
+Then open http://localhost:8000 to access a responsive dashboard that splits the
+experience into two cards:
+
+1. **Makeup API Product Finder** — accepts the same filters as the CLI (query,
+   brand, type, category, tags, price, and rating ranges) and returns matching
+   products directly from the free Makeup API.
+2. **Google Deal Finder** — runs the provided query through the Google Custom
+   Search Engine and extracts structured pricing data so you can quickly spot
+   the cheapest merchants for that query. Results that don't advertise a price
+   are collapsed behind a disclosure widget so they never clutter the main
+   ranking.
+
 Errors from blocked proxies or invalid input are surfaced inline so you always
 know why a search failed. No additional dependencies are required beyond the
 standard library.
@@ -35,7 +44,8 @@ standard library.
 Run the CLI by passing the product query. Optional arguments let you narrow the
 results by brand, product type, tags, price, and rating. Add
 `--include-google --google-results 3` to surface relevant shopping links
-through the provided Google Custom Search engine.
+through the provided Google Custom Search engine, or use `--google-cheapest` to
+rank those links by the lowest extracted price.
 
 ```bash
 python makeiteasy.py "maybelline lipstick" \
@@ -45,12 +55,14 @@ python makeiteasy.py "maybelline lipstick" \
   --product-tags vegan cruelty-free \
   --max-results 10 \
   --sort-by rating --descending \
-  --include-google --google-results 3
+  --include-google --google-results 3 --google-cheapest
 ```
 
 When results are found, the CLI prints a quick summary (count, price range,
 average rating), a compact table, and then a detailed per-product view with
-links and descriptions.
+links and descriptions. When `--google-cheapest` is enabled the CLI will reuse
+the Google Custom Search response to pull out structured price metadata so you
+can immediately see which merchant is the most affordable for the same query.
 
 ### Guided interactive mode
 

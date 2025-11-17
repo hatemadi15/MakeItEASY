@@ -10,7 +10,8 @@ import json
 import os
 import sys
 import textwrap
-from typing import Any, Dict, Iterable, List, MutableMapping, Optional, Sequence
+import re
+from typing import Any, Dict, Iterable, List, MutableMapping, Optional, Sequence, Tuple
 from urllib import error as urlerror
 from urllib import parse as urlparse
 from urllib import request as urlrequest
@@ -184,6 +185,117 @@ def google_custom_search(
     return _request_json("https://www.googleapis.com/customsearch/v1", params)
 
 
+_PRICE_RE = re.compile(r"([0-9]+(?:[.,][0-9]+)?)")
+
+
+def _parse_price(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    match = _PRICE_RE.search(text.replace(",", ""))
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+
+def _extract_price_from_google_item(item: Dict[str, Any]) -> Tuple[Optional[float], Optional[str]]:
+    pagemap = item.get("pagemap") or {}
+    currency: Optional[str] = None
+
+    def from_offers(candidates: Any) -> Optional[float]:
+        nonlocal currency
+        if not candidates:
+            return None
+        if isinstance(candidates, dict):
+            candidates = [candidates]
+        for offer in candidates:
+            if not isinstance(offer, dict):
+                continue
+            currency = offer.get("pricecurrency") or offer.get("priceCurrency") or currency
+            for key in ("price", "priceamount", "priceAmount"):
+                price = _parse_price(offer.get(key))
+                if price is not None:
+                    return price
+        return None
+
+    price = from_offers(pagemap.get("offer"))
+    if price is None:
+        price = from_offers(pagemap.get("offers"))
+
+    if price is None and pagemap.get("product"):
+        products = pagemap.get("product")
+        if isinstance(products, dict):
+            products = [products]
+        if isinstance(products, list):
+            for product in products:
+                if not isinstance(product, dict):
+                    continue
+                price = from_offers(product.get("offers")) or _parse_price(product.get("price"))
+                currency = product.get("pricecurrency") or product.get("priceCurrency") or currency
+                if price is not None:
+                    break
+
+    if price is None and pagemap.get("metatags"):
+        metatags = pagemap["metatags"]
+        if isinstance(metatags, list):
+            for tag in metatags:
+                if not isinstance(tag, dict):
+                    continue
+                currency = tag.get("product:price:currency") or currency
+                for key in ("product:price:amount", "og:price:amount"):
+                    price = _parse_price(tag.get(key))
+                    if price is not None:
+                        return price, currency
+
+    if price is None:
+        price = _parse_price(item.get("snippet"))
+
+    return price, currency
+
+
+def google_price_rank(
+    query: str,
+    *,
+    num: int = 10,
+    search_response: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Return Google Custom Search results sorted by the cheapest parsed price."""
+
+    if search_response is None:
+        search_response = google_custom_search(query, num=num)
+
+    ranked: List[Dict[str, Any]] = []
+    unpriced: List[Dict[str, Any]] = []
+    for item in search_response.get("items", []) or []:
+        price, currency = _extract_price_from_google_item(item)
+        payload = {
+            "title": item.get("title") or "Untitled result",
+            "link": item.get("link"),
+            "displayLink": item.get("displayLink"),
+            "snippet": item.get("snippet") or "",
+            "price": price,
+            "currency": currency,
+        }
+        if price is not None:
+            ranked.append(payload)
+        else:
+            unpriced.append(payload)
+
+    ranked.sort(key=lambda item: item["price"] or float("inf"))
+
+    return {
+        "ranked": ranked,
+        "unpriced": unpriced,
+        "info": search_response.get("searchInformation", {}),
+        "raw": search_response,
+    }
+
+
 def format_product(product: Dict[str, Any]) -> str:
     """Pretty print a product dictionary for terminal output."""
 
@@ -332,6 +444,11 @@ def main() -> None:
     )
     parser.add_argument("--include-google", action="store_true", help="Also perform a Google Custom Search for the query.")
     parser.add_argument("--google-results", type=int, default=5, help="How many Google results to show when --include-google is enabled.")
+    parser.add_argument(
+        "--google-cheapest",
+        action="store_true",
+        help="Rank Google Custom Search matches by extracted price information.",
+    )
 
     args = parser.parse_args()
 
@@ -378,22 +495,57 @@ def main() -> None:
         for index, product in enumerate(products, 1):
             print(f"\n[{index}] {format_product(product)}")
 
+    google_data: Optional[Dict[str, Any]] = None
+    google_error: Optional[str] = None
+    if args.include_google or args.google_cheapest:
+        try:
+            google_data = google_custom_search(args.query, num=args.google_results)
+        except HTTPRequestError as exc:
+            google_error = str(exc)
+
     if args.include_google:
         print("\nGoogle Custom Search results:")
-        try:
-            search_results = google_custom_search(args.query, num=args.google_results)
-        except HTTPRequestError as exc:
-            print(f"  Google search failed: {exc}")
+        if not google_data:
+            print(f"  Google search failed: {google_error or 'Unknown error'}")
+        else:
+            items = google_data.get("items", [])
+            if not items:
+                print("  No results returned.")
+            else:
+                for idx, item in enumerate(items, 1):
+                    snippet = textwrap.shorten(item.get("snippet", ""), width=120, placeholder="…")
+                    print(
+                        f"  {idx}. {item.get('title', 'Untitled')}\n     {item.get('link')}\n     {snippet}\n"
+                    )
+
+    if args.google_cheapest:
+        print("\nCheapest Google offers:")
+        if not google_data:
+            print(f"  Unable to score Google results: {google_error or 'Unknown error'}")
             return
 
-        items = search_results.get("items", [])
-        if not items:
-            print("  No results returned.")
-            return
+        ranking = google_price_rank(args.query, num=args.google_results, search_response=google_data)
+        priced = ranking["ranked"]
+        if not priced:
+            print("  None of the returned results included structured price information.")
+        else:
+            for idx, item in enumerate(priced, 1):
+                price_text = f"${item['price']:.2f}" if item.get("price") is not None else "n/a"
+                if item.get("currency"):
+                    price_text += f" {item['currency']}"
+                snippet = textwrap.shorten(item.get("snippet", ""), width=100, placeholder="…")
+                merchant = item.get("displayLink") or ""
+                print(
+                    f"  {idx}. {price_text} — {item.get('title', 'Untitled')} ({merchant})\n"
+                    f"     {item.get('link')}\n"
+                    f"     {snippet}\n"
+                )
 
-        for idx, item in enumerate(items, 1):
-            snippet = textwrap.shorten(item.get("snippet", ""), width=120, placeholder="…")
-            print(f"  {idx}. {item.get('title', 'Untitled')}\n     {item.get('link')}\n     {snippet}\n")
+        if ranking["unpriced"]:
+            print("  Additional results without price data:")
+            for item in ranking["unpriced"][:3]:
+                snippet = textwrap.shorten(item.get("snippet", ""), width=90, placeholder="…")
+                print(f"    - {item.get('title', 'Untitled')} — {snippet}")
 
 
 if __name__ == "__main__":

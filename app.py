@@ -10,7 +10,7 @@ from urllib import parse
 
 from makeiteasy import (
     HTTPRequestError,
-    google_custom_search,
+    google_price_rank,
     search_makeup_products,
 )
 
@@ -32,6 +32,26 @@ def _parse_float(value: str, label: str, errors: List[str]) -> Optional[float]:
     except ValueError:
         errors.append(f"{label} must be a number. You entered '{value}'.")
         return None
+
+
+def _parse_int(
+    value: str,
+    label: str,
+    errors: List[str],
+    *,
+    minimum: int,
+    maximum: int,
+    default: int,
+) -> int:
+    value = value.strip()
+    if not value:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        errors.append(f"{label} must be an integer. You entered '{value}'.")
+        return default
+    return max(minimum, min(parsed, maximum))
 
 
 def _render_tags(tags: Iterable[str]) -> str:
@@ -78,46 +98,95 @@ def _render_products(products: List[Dict[str, Any]]) -> str:
     return html_out.getvalue()
 
 
-def _render_google_results(results: List[Dict[str, Any]], info: Dict[str, Any]) -> str:
-    if not results:
-        return ""
-    out = io.StringIO()
+def _render_google_ranked(section: Dict[str, Any]) -> str:
+    ranked = section.get("ranked", [])
+    unpriced = section.get("unpriced", [])
+    info = section.get("info", {})
     timing = info.get("searchTime")
+
+    if not ranked and not unpriced:
+        return ""
+
+    out = io.StringIO()
     if timing:
         out.write(f"<p>Fetched in {html.escape(str(timing))} seconds.</p>")
-    out.write("<ul>")
-    for result in results:
-        title = html.escape(result.get("title") or "Untitled result")
-        snippet = html.escape(result.get("snippet") or "")
-        link = html.escape(result.get("link") or "#")
+
+    if ranked:
         out.write(
-            "<li>"
-            f'<h4><a href="{link}" target="_blank" rel="noopener noreferrer">{title}</a></h4>'
-            f"<p>{snippet}</p>"
-            "</li>"
+            "<div class=\"table\"><table><thead><tr><th>#</th><th>Merchant</th><th>Price</th><th>Summary</th></tr></thead><tbody>"
         )
-    out.write("</ul>")
+        for idx, item in enumerate(ranked, 1):
+            merchant = html.escape(item.get("displayLink") or "")
+            title = html.escape(item.get("title") or "Untitled result")
+            snippet = html.escape(item.get("snippet") or "")
+            link = html.escape(item.get("link") or "#")
+            price_value = item.get("price")
+            currency = html.escape(item.get("currency") or "")
+            price_html = "Unknown"
+            if price_value is not None:
+                price_html = f"${price_value:,.2f}"
+                if currency:
+                    price_html += f" {currency}"
+            out.write(
+                "<tr>"
+                f"<td>{idx}</td>"
+                f'<td><a href="{link}" target="_blank" rel="noopener noreferrer">{title}</a><br /><small>{merchant}</small></td>'
+                f"<td>{price_html}</td>"
+                f"<td>{snippet}</td>"
+                "</tr>"
+            )
+        out.write("</tbody></table></div>")
+
+    if unpriced:
+        out.write("<details><summary>Show results without price data</summary><ul>")
+        for item in unpriced:
+            title = html.escape(item.get("title") or "Untitled result")
+            link = html.escape(item.get("link") or "#")
+            snippet = html.escape(item.get("snippet") or "")
+            out.write(
+                "<li>"
+                f'<strong><a href="{link}" target="_blank" rel="noopener noreferrer">{title}</a></strong> — {snippet}'
+                "</li>"
+            )
+        out.write("</ul></details>")
+
     return out.getvalue()
 
 
 def _render_page(context: Dict[str, Any]) -> str:
-    form = context["form_state"]
-    products_section = ""
-    if context["submitted"] and context["products"]:
-        products_html = _render_products(context["products"])
-        products_section = f"<section class=\"results\"><h2>Products</h2>{products_html}</section>"
-    elif context["submitted"] and not context["errors"]:
-        products_section = "<p>No products matched your filters. Try a broader query.</p>"
+    makeup = context["makeup"]
+    google = context["google"]
 
-    errors_section = ""
-    if context["errors"]:
-        items = "".join(f"<li>{html.escape(err)}</li>" for err in context["errors"])
-        errors_section = f"<div class=\"errors\"><strong>We hit a snag:</strong><ul>{items}</ul></div>"
+    makeup_results_section = ""
+    if makeup["submitted"] and makeup["products"]:
+        products_html = _render_products(makeup["products"])
+        makeup_results_section = f"<section class=\"results\"><h2>Products</h2>{products_html}</section>"
+    elif makeup["submitted"] and not makeup["errors"]:
+        makeup_results_section = "<p>No products matched your filters. Try a broader query.</p>"
+
+    makeup_errors = ""
+    if makeup["errors"]:
+        items = "".join(f"<li>{html.escape(err)}</li>" for err in makeup["errors"])
+        makeup_errors = f"<div class=\"errors\"><strong>We hit a snag:</strong><ul>{items}</ul></div>"
+
+    google_errors = ""
+    if google["errors"]:
+        items = "".join(f"<li>{html.escape(err)}</li>" for err in google["errors"])
+        google_errors = f"<div class=\"errors\"><strong>Unable to rank Google offers:</strong><ul>{items}</ul></div>"
 
     google_section = ""
-    if context["google_results"]:
-        google_html = _render_google_results(context["google_results"], context["google_info"])
-        google_section = f"<section class=\"google-results\"><h2>Google Shopping Links</h2>{google_html}</section>"
+    if google["submitted"] and (google["ranked"] or google["unpriced"]):
+        html_body = _render_google_ranked(
+            {"ranked": google["ranked"], "unpriced": google["unpriced"], "info": google["info"]}
+        )
+        google_section = f"<section class=\"google-results\"><h2>Cheapest Google Matches</h2>{html_body}</section>"
+    elif google["submitted"] and not google["errors"]:
+        google_section = (
+            "<p>No Google results contained price information. Try a different query or increase the result count.</p>"
+        )
+
+    makeup_form = makeup["form_state"]
+    google_form = google["form_state"]
 
     return f"""<!doctype html>
 <html lang=\"en\">
@@ -144,6 +213,11 @@ def _render_page(context: Dict[str, Any]) -> str:
       .tag {{ font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; padding: 0.25rem 0.55rem; background: #f1f5f9; border-radius: 999px; }}
       .errors {{ background: #fee2e2; border: 1px solid #fecaca; color: #991b1b; padding: 1rem; border-radius: 0.75rem; margin-bottom: 1.5rem; }}
       .google-results {{ margin-top: 2rem; }}
+      .card {{ border: 1px solid #edf0f6; border-radius: 1rem; padding: 1.5rem; margin-bottom: 2rem; box-shadow: 0 10px 25px rgba(15,23,42,0.05); }}
+      table {{ width: 100%; border-collapse: collapse; margin-top: 1rem; }}
+      th, td {{ border-bottom: 1px solid #e5e7eb; padding: 0.75rem; text-align: left; }}
+      th {{ text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em; color: #6b7280; }}
+      td small {{ color: #94a3b8; }}
       @media (max-width: 640px) {{ main {{ margin: 0; border-radius: 0; }} .product-card {{ grid-template-columns: 1fr; text-align: center; }} .product-card img {{ margin: 0 auto; }} }}
     </style>
   </head>
@@ -153,25 +227,39 @@ def _render_page(context: Dict[str, Any]) -> str:
       <p>Search the free Makeup API and curated Google shopping links without any scraping.</p>
     </header>
     <main>
-      <form method=\"get\">
-        <input type=\"hidden\" name=\"submitted\" value=\"1\" />
-        <div><label for=\"query\">Search phrase</label><input id=\"query\" name=\"query\" value=\"{html.escape(form['query'])}\" placeholder=\"lipstick\" /></div>
-        <div><label for=\"brand\">Brand</label><input id=\"brand\" name=\"brand\" value=\"{html.escape(form['brand'])}\" placeholder=\"maybelline\" /></div>
-        <div><label for=\"product_type\">Product type</label><input id=\"product_type\" name=\"product_type\" value=\"{html.escape(form['product_type'])}\" placeholder=\"lipstick\" /></div>
-        <div><label for=\"product_category\">Category</label><input id=\"product_category\" name=\"product_category\" value=\"{html.escape(form['product_category'])}\" placeholder=\"liquid\" /></div>
-        <div><label for=\"product_tags\">Tags</label><input id=\"product_tags\" name=\"product_tags\" value=\"{html.escape(form['product_tags'])}\" placeholder=\"vegan, cruelty free\" /></div>
-        <div><label for=\"price_min\">Min price</label><input id=\"price_min\" name=\"price_min\" value=\"{html.escape(form['price_min'])}\" /></div>
-        <div><label for=\"price_max\">Max price</label><input id=\"price_max\" name=\"price_max\" value=\"{html.escape(form['price_max'])}\" /></div>
-        <div><label for=\"rating_min\">Min rating</label><input id=\"rating_min\" name=\"rating_min\" value=\"{html.escape(form['rating_min'])}\" /></div>
-        <div><label for=\"rating_max\">Max rating</label><input id=\"rating_max\" name=\"rating_max\" value=\"{html.escape(form['rating_max'])}\" /></div>
-        <div class=\"actions\">
-          <label class=\"checkbox\"><input type=\"checkbox\" name=\"include_google\" {'checked' if form['include_google'] else ''} /> Include Google shopping links</label>
-          <button type=\"submit\">Search products</button>
-        </div>
-      </form>
-      {errors_section}
-      {products_section}
-      {google_section}
+      <section class=\"card\">
+        <h2>Makeup API Product Finder</h2>
+        <form method=\"get\">
+          <input type=\"hidden\" name=\"makeup_submitted\" value=\"1\" />
+          <div><label for=\"query\">Search phrase</label><input id=\"query\" name=\"query\" value=\"{html.escape(makeup_form['query'])}\" placeholder=\"lipstick\" /></div>
+          <div><label for=\"brand\">Brand</label><input id=\"brand\" name=\"brand\" value=\"{html.escape(makeup_form['brand'])}\" placeholder=\"maybelline\" /></div>
+          <div><label for=\"product_type\">Product type</label><input id=\"product_type\" name=\"product_type\" value=\"{html.escape(makeup_form['product_type'])}\" placeholder=\"lipstick\" /></div>
+          <div><label for=\"product_category\">Category</label><input id=\"product_category\" name=\"product_category\" value=\"{html.escape(makeup_form['product_category'])}\" placeholder=\"liquid\" /></div>
+          <div><label for=\"product_tags\">Tags</label><input id=\"product_tags\" name=\"product_tags\" value=\"{html.escape(makeup_form['product_tags'])}\" placeholder=\"vegan, cruelty free\" /></div>
+          <div><label for=\"price_min\">Min price</label><input id=\"price_min\" name=\"price_min\" value=\"{html.escape(makeup_form['price_min'])}\" /></div>
+          <div><label for=\"price_max\">Max price</label><input id=\"price_max\" name=\"price_max\" value=\"{html.escape(makeup_form['price_max'])}\" /></div>
+          <div><label for=\"rating_min\">Min rating</label><input id=\"rating_min\" name=\"rating_min\" value=\"{html.escape(makeup_form['rating_min'])}\" /></div>
+          <div><label for=\"rating_max\">Max rating</label><input id=\"rating_max\" name=\"rating_max\" value=\"{html.escape(makeup_form['rating_max'])}\" /></div>
+          <div class=\"actions\">
+            <button type=\"submit\">Search products</button>
+          </div>
+        </form>
+        {makeup_errors}
+        {makeup_results_section}
+      </section>
+      <section class=\"card\">
+        <h2>Google Deal Finder</h2>
+        <form method=\"get\">
+          <input type=\"hidden\" name=\"google_submitted\" value=\"1\" />
+          <div><label for=\"google_query\">Search phrase</label><input id=\"google_query\" name=\"google_query\" value=\"{html.escape(google_form['query'])}\" placeholder=\"maybelline superstay lipstick\" /></div>
+          <div><label for=\"google_results\">Results to scan (1-10)</label><input id=\"google_results\" name=\"google_results\" value=\"{html.escape(google_form['results'])}\" /></div>
+          <div class=\"actions\">
+            <button type=\"submit\">Rank cheapest options</button>
+          </div>
+        </form>
+        {google_errors}
+        {google_section}
+      </section>
     </main>
   </body>
 </html>
@@ -186,8 +274,11 @@ class MakeupHandler(BaseHTTPRequestHandler):
             return
 
         params = parse.parse_qs(parsed.query)
-        submitted = _first(params, "submitted") == "1"
-        errors: List[str] = []
+        makeup_submitted = _first(params, "makeup_submitted") == "1"
+        google_submitted = _first(params, "google_submitted") == "1"
+
+        makeup_errors: List[str] = []
+        google_errors: List[str] = []
 
         query = _first(params, "query").strip()
         brand = _first(params, "brand").strip() or None
@@ -196,18 +287,14 @@ class MakeupHandler(BaseHTTPRequestHandler):
         tags_raw = _first(params, "product_tags").strip()
         tag_list = [tag.strip() for tag in tags_raw.split(",") if tag.strip()]
 
-        price_min = _parse_float(_first(params, "price_min"), "Min price", errors)
-        price_max = _parse_float(_first(params, "price_max"), "Max price", errors)
-        rating_min = _parse_float(_first(params, "rating_min"), "Min rating", errors)
-        rating_max = _parse_float(_first(params, "rating_max"), "Max rating", errors)
-
-        include_google = _first(params, "include_google") in {"on", "true", "1"}
+        price_min = _parse_float(_first(params, "price_min"), "Min price", makeup_errors)
+        price_max = _parse_float(_first(params, "price_max"), "Max price", makeup_errors)
+        rating_min = _parse_float(_first(params, "rating_min"), "Min rating", makeup_errors)
+        rating_max = _parse_float(_first(params, "rating_max"), "Max rating", makeup_errors)
 
         products: List[Dict[str, Any]] = []
-        google_results: List[Dict[str, Any]] = []
-        google_info: Dict[str, Any] = {}
 
-        if submitted and not errors:
+        if makeup_submitted and not makeup_errors:
             try:
                 products = search_makeup_products(
                     query or None,
@@ -222,17 +309,35 @@ class MakeupHandler(BaseHTTPRequestHandler):
                     max_results=12,
                 )
             except HTTPRequestError as exc:
-                errors.append(str(exc))
+                makeup_errors.append(str(exc))
 
-            if include_google and query and not errors:
+        google_query = _first(params, "google_query").strip()
+        google_results_requested = _parse_int(
+            _first(params, "google_results"),
+            "Results to scan",
+            google_errors,
+            minimum=1,
+            maximum=10,
+            default=5,
+        )
+
+        google_ranked: List[Dict[str, Any]] = []
+        google_unpriced: List[Dict[str, Any]] = []
+        google_info: Dict[str, Any] = {}
+
+        if google_submitted:
+            if not google_query:
+                google_errors.append("Please enter a Google search phrase.")
+            elif not google_errors:
                 try:
-                    google_data = google_custom_search(query, num=5)
-                    google_results = google_data.get("items", []) or []
-                    google_info = google_data.get("searchInformation", {})
+                    ranking = google_price_rank(google_query, num=google_results_requested)
+                    google_ranked = ranking["ranked"]
+                    google_unpriced = ranking["unpriced"]
+                    google_info = ranking["info"]
                 except HTTPRequestError as exc:
-                    errors.append(f"Google Search failed: {exc}")
+                    google_errors.append(f"Google Search failed: {exc}")
 
-        form_state = {
+        makeup_form_state = {
             "query": query,
             "brand": brand or "",
             "product_type": product_type or "",
@@ -242,17 +347,29 @@ class MakeupHandler(BaseHTTPRequestHandler):
             "price_max": _first(params, "price_max"),
             "rating_min": _first(params, "rating_min"),
             "rating_max": _first(params, "rating_max"),
-            "include_google": include_google,
+        }
+
+        google_form_state = {
+            "query": google_query,
+            "results": str(google_results_requested),
         }
 
         html_body = _render_page(
             {
-                "submitted": submitted,
-                "form_state": form_state,
-                "products": products,
-                "errors": errors,
-                "google_results": google_results,
-                "google_info": google_info,
+                "makeup": {
+                    "submitted": makeup_submitted,
+                    "products": products,
+                    "errors": makeup_errors,
+                    "form_state": makeup_form_state,
+                },
+                "google": {
+                    "submitted": google_submitted,
+                    "ranked": google_ranked,
+                    "unpriced": google_unpriced,
+                    "info": google_info,
+                    "errors": google_errors,
+                    "form_state": google_form_state,
+                },
             }
         )
 

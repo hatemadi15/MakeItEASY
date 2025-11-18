@@ -120,44 +120,36 @@ def _render_google_ranked(section: Dict[str, Any]) -> str:
     if timing:
         out.write(f"<p>Fetched in {html.escape(str(timing))} seconds.</p>")
 
-    if ranked:
+    combined = ranked + unpriced
+    if combined:
         out.write(
-            "<div class=\"table\"><table><thead><tr><th>#</th><th>Merchant</th><th>Price</th><th>Summary</th></tr></thead><tbody>"
+            "<div class=\"table\"><table><thead><tr><th>#</th><th>Merchant</th><th>Price / Action</th><th>Summary</th></tr></thead><tbody>"
         )
-        for idx, item in enumerate(ranked, 1):
+        for idx, item in enumerate(combined, 1):
             merchant = html.escape(item.get("displayLink") or "")
             title = html.escape(item.get("title") or "Untitled result")
             snippet = html.escape(item.get("snippet") or "")
-            link = html.escape(item.get("link") or "#")
+            link_raw = item.get("link") or "#"
+            link = html.escape(link_raw)
             price_value = item.get("price")
             currency = html.escape(item.get("currency") or "")
-            price_html = "Unknown"
-            if price_value is not None:
-                price_html = f"${price_value:,.2f}"
-                if currency:
-                    price_html += f" {currency}"
+            price_html = (
+                f"${price_value:,.2f}{(' ' + currency) if currency else ''}"
+                if price_value is not None
+                else f'<a href="{link}" target="_blank" rel="noopener noreferrer">Contact merchant</a>'
+            )
+            badge = ""
+            if item.get("is_instagram"):
+                badge = "<span class=\"tag insta\">Instagram</span>"
             out.write(
                 "<tr>"
                 f"<td>{idx}</td>"
-                f'<td><a href="{link}" target="_blank" rel="noopener noreferrer">{title}</a><br /><small>{merchant}</small></td>'
+                f'<td><a href="{link}" target="_blank" rel="noopener noreferrer">{title}</a><br /><small>{merchant}</small>{badge}</td>'
                 f"<td>{price_html}</td>"
                 f"<td>{snippet}</td>"
                 "</tr>"
             )
         out.write("</tbody></table></div>")
-
-    if unpriced:
-        out.write("<details><summary>Show results without price data</summary><ul>")
-        for item in unpriced:
-            title = html.escape(item.get("title") or "Untitled result")
-            link = html.escape(item.get("link") or "#")
-            snippet = html.escape(item.get("snippet") or "")
-            out.write(
-                "<li>"
-                f'<strong><a href="{link}" target="_blank" rel="noopener noreferrer">{title}</a></strong> — {snippet}'
-                "</li>"
-            )
-        out.write("</ul></details>")
 
     return out.getvalue()
 
@@ -232,6 +224,7 @@ def _render_page(context: Dict[str, Any]) -> str:
       .product-card img {{ width: 120px; height: 120px; object-fit: contain; background: #f8fafc; border-radius: 0.75rem; padding: 0.5rem; }}
       .tags {{ margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 0.35rem; }}
       .tag {{ font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; padding: 0.25rem 0.55rem; background: #f1f5f9; border-radius: 999px; }}
+      .tag.insta {{ background: #db2777; color: #fff; }}
       .errors {{ background: #fee2e2; border: 1px solid #fecaca; color: #991b1b; padding: 1rem; border-radius: 0.75rem; margin-bottom: 1.5rem; }}
       .google-results {{ margin-top: 2rem; }}
       .card {{ border: 1px solid #edf0f6; border-radius: 1rem; padding: 1.5rem; margin-bottom: 2rem; box-shadow: 0 10px 25px rgba(15,23,42,0.05); }}

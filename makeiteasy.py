@@ -256,10 +256,34 @@ def _extract_price_from_google_item(item: Dict[str, Any]) -> Tuple[Optional[floa
                     if price is not None:
                         return price, currency
 
-    if price is None:
-        price = _parse_price(item.get("snippet"))
-
     return price, currency
+
+
+def _extract_summary(item: Dict[str, Any]) -> str:
+    """Return the most descriptive snippet for the Google result."""
+
+    pagemap = item.get("pagemap") or {}
+    snippet = (item.get("snippet") or "").strip()
+
+    meta_sources = [
+        "og:description",
+        "twitter:description",
+        "og:title",
+        "description",
+    ]
+    metatags = pagemap.get("metatags") or []
+    if isinstance(metatags, dict):
+        metatags = [metatags]
+
+    for tag in metatags:
+        if not isinstance(tag, dict):
+            continue
+        for key in meta_sources:
+            candidate = (tag.get(key) or "").strip()
+            if candidate:
+                return candidate
+
+    return snippet
 
 
 def google_price_rank(
@@ -278,13 +302,17 @@ def google_price_rank(
     unpriced: List[Dict[str, Any]] = []
     for item in search_response.get("items", []) or []:
         price, currency = _extract_price_from_google_item(item)
+        summary = _extract_summary(item)
+        link = item.get("link")
+        is_instagram = isinstance(link, str) and "instagram.com" in link.lower()
         payload = {
             "title": item.get("title") or "Untitled result",
-            "link": item.get("link"),
+            "link": link,
             "displayLink": item.get("displayLink"),
-            "snippet": item.get("snippet") or "",
+            "snippet": summary,
             "price": price,
             "currency": currency,
+            "is_instagram": is_instagram,
         }
         if price is not None:
             ranked.append(payload)
@@ -292,6 +320,7 @@ def google_price_rank(
             unpriced.append(payload)
 
     ranked.sort(key=lambda item: item["price"] or float("inf"))
+    unpriced.sort(key=lambda item: (not item.get("is_instagram", False), item.get("title", "")))
 
     return {
         "ranked": ranked,
@@ -558,14 +587,17 @@ def main() -> None:
             print("  None of the returned results included structured price information.")
         else:
             for idx, item in enumerate(priced, 1):
-                price_text = f"${item['price']:.2f}" if item.get("price") is not None else "n/a"
-                if item.get("currency"):
+                price_text = f"${item['price']:.2f}" if item.get("price") is not None else ""
+                if price_text and item.get("currency"):
                     price_text += f" {item['currency']}"
                 snippet = textwrap.shorten(item.get("snippet", ""), width=100, placeholder="…")
                 merchant = item.get("displayLink") or ""
+                link = item.get("link") or ""
+                if not price_text:
+                    price_text = f"Contact merchant → {link}"
                 print(
                     f"  {idx}. {price_text} — {item.get('title', 'Untitled')} ({merchant})\n"
-                    f"     {item.get('link')}\n"
+                    f"     {link}\n"
                     f"     {snippet}\n"
                 )
 
@@ -573,7 +605,10 @@ def main() -> None:
             print("  Additional results without price data:")
             for item in ranking["unpriced"][:3]:
                 snippet = textwrap.shorten(item.get("snippet", ""), width=90, placeholder="…")
-                print(f"    - {item.get('title', 'Untitled')} — {snippet}")
+                marker = " (Instagram)" if item.get("is_instagram") else ""
+                link = item.get("link") or ""
+                print(f"    - Contact merchant → {link} | {item.get('title', 'Untitled')}{marker}\n"
+                      f"      {snippet}")
 
 
 if __name__ == "__main__":

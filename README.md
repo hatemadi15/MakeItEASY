@@ -32,12 +32,15 @@ experience into two cards:
 2. **EasySearch** — runs the provided query through the Google Custom Search
    Engine, limits the matches to a recent timeframe (past week/month/quarter),
    and extracts structured pricing data so you can quickly spot the cheapest
-   merchants for that query. Results that don't advertise a price are collapsed
-   behind a disclosure widget so they never clutter the main ranking.
+   merchants for that query. Results are only labeled with a price when Google
+   exposes structured offer data; everything else is kept in the same table but
+   shows a “Contact merchant” link so you can jump straight to the brand’s
+   website or Instagram page (Instagram profiles are surfaced first).
 
 Errors from blocked proxies or invalid input are surfaced inline so you always
-know why a search failed. No additional dependencies are required beyond the
-standard library.
+know why a search failed, and every EasySearch row uses the actual metadata
+returned by Google (Instagram listings are flagged visually). No additional
+dependencies are required beyond the standard library.
 
 ### CLI Helper
 
@@ -65,6 +68,8 @@ average rating), a compact table, and then a detailed per-product view with
 links and descriptions. When `--google-cheapest` is enabled the CLI will reuse
 the Google Custom Search response to pull out structured price metadata so you
 can immediately see which merchant is the most affordable for the same query.
+If Google doesn’t expose a price, the CLI now replaces that column with a
+“Contact merchant → URL” entry instead of guessing.
 
 ### Guided interactive mode
 
